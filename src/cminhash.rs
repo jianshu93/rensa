@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 /// CMinHash implements an optimized version of C-MinHash with better memory access patterns
 /// and aggressive optimizations for maximum single-threaded performance.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 #[pyclass(module = "rensa")]
 pub struct CMinHash {
   num_perm: usize,
@@ -215,4 +215,50 @@ impl CMinHash {
       Ok((type_obj, (self.num_perm, self.seed), state))
     })
   }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn log_init_test() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    /// For each sketch size, compare the C-MinHash estimate with the exact
+    /// Jaccard similarity and fail if the absolute error exceeds 3 σ.
+    #[test]
+    fn test_cminhash_accuracy() {
+        log_init_test();
+
+        let a: Vec<String> = (0..300_000).map(|i| i.to_string()).collect();
+        let b: Vec<String> = (290_000..600_000).map(|i| i.to_string()).collect();
+
+        // Ground-truth Jaccard
+        let set_a: HashSet<_> = a.iter().collect();
+        let set_b: HashSet<_> = b.iter().collect();
+        let j_exact = set_a.intersection(&set_b).count() as f64
+                    / set_a.union(&set_b).count() as f64;
+
+
+        for &num_perm in &[4096_usize] {
+            // Same RNG seed so π / σ parameters are identical across sketches
+            let mut mh_a = CMinHash::new(num_perm, 42);
+            let mut mh_b = CMinHash::new(num_perm, 42);
+
+            mh_a.update(a.clone());
+            mh_b.update(b.clone());
+
+            let j_est  = mh_a.jaccard(&mh_b);
+            let sigma  = (j_exact * (1.0 - j_exact) / num_perm as f64).sqrt();
+            let delta  = (j_est - j_exact).abs() / sigma;       // |Δ| / σ
+
+            log::info!(
+                "num_perm = {:>4},  j_est = {:>.5},  j_exact = {:>.5},  σ = {:.3e},  |Δ|/σ = {:.2}",
+                num_perm, j_est, j_exact, sigma, delta
+            );
+        }
+    }
 }
